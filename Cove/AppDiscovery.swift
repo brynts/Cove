@@ -10,7 +10,7 @@ enum AppDiscovery {
         CoveWriteLog("scan start \(os)")
         progress("Checking \(os)")
         guard CoveOSIsSupported() else {
-            let message = "\(os) is outside iOS 26.0\u201326.7.2 and 27.0\u201327.2."
+            let message = "\(os) is outside iOS 26.0-26.7.2 and 27.0-27.2."
             CoveWriteLog(message)
             return .failure(CoveFailure(message: message))
         }
