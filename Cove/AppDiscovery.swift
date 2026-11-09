@@ -15,7 +15,7 @@ enum AppDiscovery {
             return .failure(CoveFailure(message: message))
         }
         guard let group = CoveAppGroupContainer(), !group.isEmpty else {
-            let message = "App Group \(CoveAppGroupID()) is missing. Sign Cove with that application-groups entitlement."
+            let message = "App Group \(CoveAppGroupID()) is missing. \(CoveProvisioningGroupsSummary())"
             CoveWriteLog(message)
             return .failure(CoveFailure(message: message))
         }

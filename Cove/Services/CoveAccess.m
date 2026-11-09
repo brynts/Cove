@@ -71,6 +71,57 @@ NSString *CoveAppGroupContainer(void) {
     return url.path;
 }
 
+static NSArray<NSString *> *coveStringList(id raw) {
+    NSMutableArray<NSString *> *groups = [NSMutableArray array];
+    if ([raw isKindOfClass:[NSArray class]]) {
+        for (id item in (NSArray *)raw) {
+            if ([item isKindOfClass:[NSString class]] && [item length] > 0) {
+                [groups addObject:item];
+            }
+        }
+    } else if ([raw isKindOfClass:[NSString class]] && [raw length] > 0) {
+        [groups addObject:raw];
+    }
+    return groups;
+}
+
+NSString *CoveProvisioningGroupsSummary(void) {
+    NSURL *url = [[NSBundle mainBundle] URLForResource:@"embedded" withExtension:@"mobileprovision"];
+    if (url == nil) {
+        return @"No embedded.mobileprovision. Resign with a development profile that contains the App Group.";
+    }
+    NSData *data = [NSData dataWithContentsOfURL:url];
+    if (data.length == 0) return @"embedded.mobileprovision is empty.";
+
+    NSData *startToken = [@"<?xml" dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *endToken = [@"</plist>" dataUsingEncoding:NSUTF8StringEncoding];
+    NSRange start = [data rangeOfData:startToken options:0 range:NSMakeRange(0, data.length)];
+    if (start.location == NSNotFound) return @"Provisioning profile could not be decoded.";
+    NSRange tail = NSMakeRange(start.location, data.length - start.location);
+    NSRange end = [data rangeOfData:endToken options:0 range:tail];
+    if (end.location == NSNotFound) return @"Provisioning profile could not be decoded.";
+
+    NSData *xml = [data subdataWithRange:NSMakeRange(start.location, NSMaxRange(end) - start.location)];
+    id plist = [NSPropertyListSerialization propertyListWithData:xml options:NSPropertyListImmutable format:NULL error:nil];
+    if (![plist isKindOfClass:[NSDictionary class]]) return @"Provisioning profile could not be decoded.";
+
+    NSDictionary *ents = ((NSDictionary *)plist)[@"Entitlements"];
+    if (![ents isKindOfClass:[NSDictionary class]]) ents = @{};
+    NSString *appID = [ents[@"application-identifier"] isKindOfClass:[NSString class]]
+        ? ents[@"application-identifier"] : @"?";
+    NSString *team = [ents[@"com.apple.developer.team-identifier"] isKindOfClass:[NSString class]]
+        ? ents[@"com.apple.developer.team-identifier"] : @"?";
+    NSArray<NSString *> *groups = coveStringList(ents[@"com.apple.security.application-groups"]);
+
+    if (groups.count == 0) {
+        return [NSString stringWithFormat:@"Profile %@ (team %@) does not include application-groups. Enable %@ on App ID tr.sapu.cove, regenerate that profile, then resign. A 7-day SideStore profile cannot claim this group when another team already owns it.", appID, team, @COVE_APP_GROUP];
+    }
+    if (![groups containsObject:@COVE_APP_GROUP]) {
+        return [NSString stringWithFormat:@"Profile %@ (team %@) allows [%@], not %@. The profile group and the signed group must match.", appID, team, [groups componentsJoinedByString:@", "], @COVE_APP_GROUP];
+    }
+    return [NSString stringWithFormat:@"Profile %@ (team %@) lists %@. containerURL is still nil, so iOS did not grant the signed entitlement. Resign with DER entitlements, delete Cove, then install again.", appID, team, @COVE_APP_GROUP];
+}
+
 NSString *CoveDescribeGrant(int64_t code) {
     switch (code) {
         case -1:
@@ -109,8 +160,8 @@ void CoveWriteLog(NSString *message) {
     NSString *line = [NSString stringWithFormat:@"%@  %@\n", stamp, message];
     int fd = open(path.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) return;
-    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
-    if (data.length) write(fd, data.bytes, data.length);
+    NSData *body = [line dataUsingEncoding:NSUTF8StringEncoding];
+    if (body.length) write(fd, body.bytes, body.length);
     fsync(fd);
     close(fd);
     NSLog(@"Cove %@", message);

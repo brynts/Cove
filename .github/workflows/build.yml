@@ -29,7 +29,7 @@ jobs:
             base64 -D -i AppIcon.png.b64 -o "$ICON"
           fi
 
-      - name: Build unsigned IPA
+      - name: Build ad-hoc signed IPA
         run: |
           set -euo pipefail
           DERIVED="$(pwd)/build/DerivedData"
@@ -49,28 +49,58 @@ jobs:
             DEVELOPMENT_TEAM=""
 
           APP_PATH=$(find "$ARCHIVE/Products/Applications" -name "*.app" -maxdepth 1 | head -1)
+          test -n "$APP_PATH"
           IPA_DIR="$(pwd)/build/ipa_payload"
           rm -rf "$IPA_DIR"
           mkdir -p "$IPA_DIR/Payload"
           cp -R "$APP_PATH" "$IPA_DIR/Payload/"
+          PAYLOAD_APP=$(find "$IPA_DIR/Payload" -name "*.app" -maxdepth 1 | head -1)
+
+          # Resigners read entitlements from the Mach-O blob. An unsigned
+          # archive has none, so SideStore/BrySign/zsign drop the App Group.
+          cp "Cove/Cove.entitlements" "$PAYLOAD_APP/entitlements.plist"
+          cp "Cove/Cove.entitlements" "$PAYLOAD_APP/archived-expanded-entitlements.xcent"
+          xattr -cr "$PAYLOAD_APP"
+          xcrun codesign --force --sign - \
+            --entitlements "Cove/Cove.entitlements" \
+            --generate-entitlement-der \
+            --timestamp=none \
+            "$PAYLOAD_APP"
+
+          mkdir -p build
+          xcrun codesign -d --entitlements :- "$PAYLOAD_APP" > build/signed-entitlements.plist
+          grep -q "group.tr.sapu.cove" build/signed-entitlements.plist
+          cp "Cove/Cove.entitlements" build/Cove.entitlements
+
           (cd "$IPA_DIR" && zip -r -y "../Cove.ipa" Payload)
           ls -lh "$(pwd)/build/Cove.ipa"
+          echo "---- embedded entitlements ----"
+          cat build/signed-entitlements.plist
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Cove-unsigned
-          path: build/Cove.ipa
+          name: Cove-adhoc
+          path: |
+            build/Cove.ipa
+            build/Cove.entitlements
+            build/signed-entitlements.plist
           if-no-files-found: error
 
       - name: Draft release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: Build ${{ github.run_number }} (unsigned IPA)
+          name: Build ${{ github.run_number }} (ad-hoc IPA)
           draft: true
-          files: build/Cove.ipa
+          files: |
+            build/Cove.ipa
+            build/Cove.entitlements
           body: |
-            Unsigned IPA. Sign it before installing and keep the App Group entitlement `group.tr.sapu.cove`.
+            Ad-hoc signed IPA. `group.tr.sapu.cove` is already in the code signature (XML + DER).
+
+            Resign with your development certificate and do not strip entitlements. The provisioning profile must list that same group on App ID `tr.sapu.cove`. A 7-day SideStore profile cannot use this group when it is registered to another team.
+
+            Delete the old Cove install before installing this build.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

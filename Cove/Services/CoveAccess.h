@@ -13,6 +13,7 @@ BOOL CoveOSIsSupported(void);
 NSString *CoveOSLabel(void);
 NSString *CoveAppGroupID(void);
 NSString * _Nullable CoveAppGroupContainer(void);
+NSString *CoveProvisioningGroupsSummary(void);
 NSString *CoveDescribeGrant(int64_t code);
 
 /// Consume a worse_query sandbox extension. Caller must CoveRelease a handle >= 0.
