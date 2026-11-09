@@ -62,8 +62,9 @@ enum AppDiscovery {
         for (index, raw) in folders.enumerated() {
             progress("Reading apps \(index + 1)/\(folders.count)")
             let path = PathGuard.normalize(raw)
-            let bundleID = CoveContainerIdentifier(path) ?? known[path]?.bundleID
-            guard let bundleID, bundleID.contains(".") else { continue }
+            let uuid = URL(fileURLWithPath: path).lastPathComponent
+            let bundleID = CoveContainerIdentifier(path) ?? known[path]?.bundleID ?? uuid
+            guard bundleID.contains(".") || UUID(uuidString: bundleID) != nil else { continue }
             let cachedName = known[path]?.name
             byID[bundleID] = InstalledApp(
                 bundleID: bundleID,
@@ -83,7 +84,7 @@ enum AppDiscovery {
 
     private static func appsFromCatalog() -> [InstalledApp]? {
         let catalog = CoveInstalledApplications()
-        CoveWriteLog("catalog \(catalog.count)")
+        CoveWriteLog("catalog \(catalog.count) \(CoveCatalogStatus())")
         guard catalog.count > 0 else { return nil }
         var byID: [String: InstalledApp] = [:]
         var withPath = 0
@@ -155,7 +156,7 @@ enum AppDiscovery {
         var map: [String: Cached] = [:]
         for line in text.split(whereSeparator: \.isNewline) {
             let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard parts.count >= 3, parts[0].contains("."), parts[1].hasPrefix("/") else { continue }
+            guard parts.count >= 3, parts[0].contains(".") || UUID(uuidString: parts[0]) != nil, parts[1].hasPrefix("/") else { continue }
             map[parts[1]] = Cached(bundleID: parts[0], path: parts[1], name: parts[2])
         }
         return map
@@ -171,8 +172,6 @@ enum AppDiscovery {
         let baseline = CoveBaselineInode()
         CoveWriteLog("leak baseline \(baseline)")
         guard baseline > 1 else { return [] }
-        let window = min(baseline, UInt64(6_000_000))
-        let start = baseline > window ? baseline - window + 1 : 1
         var usable: String?
         for root in roots {
             if CoveLeakRange(root, 1, 1) != nil {
@@ -186,19 +185,17 @@ enum AppDiscovery {
         }
         var found: [String] = []
         let step: UInt64 = 500_000
-        var cursor = start
+        var cursor: UInt64 = 1
         while cursor <= baseline {
             let end = min(baseline, cursor + step - 1)
             if let batch = CoveLeakRange(root, cursor, end) {
                 found.append(contentsOf: batch)
             }
-            let done = end - start
-            let span = max(baseline - start, 1)
-            progress("Scanning inodes \(Int((done * 100) / span))%")
+            progress("Scanning inodes \(Int((end * 100) / max(baseline, 1)))%")
             if end == baseline { break }
             cursor = end + 1
         }
-        CoveWriteLog("leak found \(found.count) range \(start)-\(baseline)")
+        CoveWriteLog("leak found \(found.count) range 1-\(baseline)")
         return found
     }
 }
