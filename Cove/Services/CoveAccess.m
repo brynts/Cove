@@ -1,4 +1,4 @@
-// Cove access layer for worse_query.
+// Cove access layer.
 // Copyright (C) 2026 Bryan Saputra
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -8,6 +8,7 @@
 #import "CoveAccess.h"
 #import "CoveConfig.h"
 #import "worse_query.h"
+#import "bad_query.h"
 
 #include <pthread.h>
 #include <string.h>
@@ -86,11 +87,11 @@ static NSArray<NSString *> *coveStringList(id raw) {
 }
 
 NSString *CoveProvisioningGroupsSummary(void) {
-    NSURL *url = [[NSBundle mainBundle] URLForResource:@"embedded" withExtension:@"mobileprovision"];
-    if (url == nil) {
-        return @"No embedded.mobileprovision. Resign with a development profile that contains the App Group.";
+    NSString *path = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"embedded.mobileprovision"];
+    if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+        return @"No provisioning profile in the app bundle. RustSign certificates do not include this App Group, so Cove uses the HouseArrest query.";
     }
-    NSData *data = [NSData dataWithContentsOfURL:url];
+    NSData *data = [NSData dataWithContentsOfFile:path];
     if (data.length == 0) return @"embedded.mobileprovision is empty.";
 
     NSData *startToken = [@"<?xml" dataUsingEncoding:NSUTF8StringEncoding];
@@ -112,32 +113,30 @@ NSString *CoveProvisioningGroupsSummary(void) {
     NSString *team = [ents[@"com.apple.developer.team-identifier"] isKindOfClass:[NSString class]]
         ? ents[@"com.apple.developer.team-identifier"] : @"?";
     NSArray<NSString *> *groups = coveStringList(ents[@"com.apple.security.application-groups"]);
-
     if (groups.count == 0) {
-        return [NSString stringWithFormat:@"Profile %@ (team %@) does not include application-groups. Enable %@ on App ID tr.sapu.cove, regenerate that profile, then resign. A 7-day SideStore profile cannot claim this group when another team already owns it.", appID, team, @COVE_APP_GROUP];
+        return [NSString stringWithFormat:@"Profile %@ (team %@) has no App Group. Using the HouseArrest query.", appID, team];
     }
-    if (![groups containsObject:@COVE_APP_GROUP]) {
-        return [NSString stringWithFormat:@"Profile %@ (team %@) allows [%@], not %@. The profile group and the signed group must match.", appID, team, [groups componentsJoinedByString:@", "], @COVE_APP_GROUP];
-    }
-    return [NSString stringWithFormat:@"Profile %@ (team %@) lists %@. containerURL is still nil, so iOS did not grant the signed entitlement. Resign with DER entitlements, delete Cove, then install again.", appID, team, @COVE_APP_GROUP];
+    return [NSString stringWithFormat:@"Profile %@ (team %@) groups: %@.", appID, team, [groups componentsJoinedByString:@", "]];
 }
 
 NSString *CoveDescribeGrant(int64_t code) {
     switch (code) {
         case -1:
-            return @"App Group container is not available. The signed app needs the application-groups entitlement.";
+            return @"Container query could not start.";
         case -2:
             return @"Could not resolve container-manager symbols on this iOS version.";
         case -3:
-            return @"Could not create a container query.";
+            return @"containermanagerd returned no result.";
         case -4:
-            return @"Could not create the App Group symlink.";
+            return @"Could not read a sandbox token.";
         case -5:
             return @"containermanagerd rejected the query.";
         case -6:
             return @"The kernel refused the sandbox extension.";
         case -100:
-            return @"This iOS version is outside 26.0–26.7.2 and 27.0–27.2.";
+            return @"This iOS version is outside 26.0\u201326.7.2 and 27.0\u201327.2.";
+        case -254:
+            return @"The path is not visible yet.";
         case -255:
             return @"The path is empty or not absolute.";
         default:
@@ -193,9 +192,16 @@ int64_t CoveGrant(NSString *path) {
     }
 
     pthread_mutex_lock(&gLock);
-    CoveWriteLog([NSString stringWithFormat:@"grant alt=%d %@", alt, path]);
-    // create_dir = true skips lstat. A sandboxed lstat hides foreign containers as ENOENT.
-    int64_t handle = worse_query(path, @COVE_APP_GROUP, alt, true);
+    NSString *groupPath = CoveAppGroupContainer();
+    int64_t handle = -1;
+    if (groupPath.length > 0) {
+        CoveWriteLog([NSString stringWithFormat:@"grant worse alt=%d %@", alt, path]);
+        handle = worse_query(path, @COVE_APP_GROUP, alt, true);
+    } else {
+        // Same call HouseArrest uses when there is no App Group.
+        CoveWriteLog([NSString stringWithFormat:@"grant bad %@", path]);
+        handle = bad_query((char *)path.fileSystemRepresentation, true, NULL, false);
+    }
     CoveWriteLog([NSString stringWithFormat:@"grant result %lld %@", handle, CoveDescribeGrant(handle)]);
     pthread_mutex_unlock(&gLock);
     return handle;
