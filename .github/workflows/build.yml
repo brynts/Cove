@@ -29,7 +29,7 @@ jobs:
             base64 -D -i AppIcon.png.b64 -o "$ICON"
           fi
 
-      - name: Build IPA
+      - name: Build unsigned IPA
         run: |
           set -euo pipefail
           DERIVED="$(pwd)/build/DerivedData"
@@ -54,18 +54,6 @@ jobs:
           rm -rf "$IPA_DIR"
           mkdir -p "$IPA_DIR/Payload"
           cp -R "$APP_PATH" "$IPA_DIR/Payload/"
-          PAYLOAD_APP=$(find "$IPA_DIR/Payload" -name "*.app" -maxdepth 1 | head -1)
-
-          # worse_query needs the App Group in the Mach-O blob. Rustsign
-          # keeps entitlements it finds there; it does not take a side file.
-          xattr -cr "$PAYLOAD_APP"
-          xcrun codesign --force --sign - \
-            --entitlements "Cove/Cove.entitlements" \
-            --generate-entitlement-der \
-            --timestamp=none \
-            "$PAYLOAD_APP"
-          xcrun codesign -d --entitlements :- "$PAYLOAD_APP" | grep -q "group.tr.sapu.cove"
-
           (cd "$IPA_DIR" && zip -r -y "../Cove.ipa" Payload)
           ls -lh "$(pwd)/build/Cove.ipa"
 
@@ -84,6 +72,6 @@ jobs:
           draft: true
           files: build/Cove.ipa
           body: |
-            Sign `Cove.ipa` with rustsign, same as HouseArrest. Nothing else to download.
+            Unsigned IPA. Sign Cove.ipa with RustSign, same as HouseArrest.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -14,12 +14,11 @@ enum AppDiscovery {
             CoveWriteLog(message)
             return .failure(CoveFailure(message: message))
         }
-        guard let group = CoveAppGroupContainer(), !group.isEmpty else {
-            let message = "App Group \(CoveAppGroupID()) is missing. \(CoveProvisioningGroupsSummary())"
-            CoveWriteLog(message)
-            return .failure(CoveFailure(message: message))
+        if let group = CoveAppGroupContainer(), !group.isEmpty {
+            CoveWriteLog("group \(group)")
+        } else {
+            CoveWriteLog("no app group. \(CoveProvisioningGroupsSummary())")
         }
-        CoveWriteLog("group \(group)")
 
         progress("Listing application containers")
         let roots = [
