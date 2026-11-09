@@ -1,3 +1,5 @@
 #import "Services/CoveAccess.h"
+#import "Services/CoveCatalog.h"
 #import "Exploit/worse_query.h"
 #import "Exploit/pathleak.h"
+#import "Exploit/bad_query.h"
