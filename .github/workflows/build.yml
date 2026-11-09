@@ -29,7 +29,7 @@ jobs:
             base64 -D -i AppIcon.png.b64 -o "$ICON"
           fi
 
-      - name: Build ad-hoc signed IPA
+      - name: Build IPA
         run: |
           set -euo pipefail
           DERIVED="$(pwd)/build/DerivedData"
@@ -56,51 +56,34 @@ jobs:
           cp -R "$APP_PATH" "$IPA_DIR/Payload/"
           PAYLOAD_APP=$(find "$IPA_DIR/Payload" -name "*.app" -maxdepth 1 | head -1)
 
-          # Resigners read entitlements from the Mach-O blob. An unsigned
-          # archive has none, so SideStore/BrySign/zsign drop the App Group.
-          cp "Cove/Cove.entitlements" "$PAYLOAD_APP/entitlements.plist"
-          cp "Cove/Cove.entitlements" "$PAYLOAD_APP/archived-expanded-entitlements.xcent"
+          # worse_query needs the App Group in the Mach-O blob. Rustsign
+          # keeps entitlements it finds there; it does not take a side file.
           xattr -cr "$PAYLOAD_APP"
           xcrun codesign --force --sign - \
             --entitlements "Cove/Cove.entitlements" \
             --generate-entitlement-der \
             --timestamp=none \
             "$PAYLOAD_APP"
-
-          mkdir -p build
-          xcrun codesign -d --entitlements :- "$PAYLOAD_APP" > build/signed-entitlements.plist
-          grep -q "group.tr.sapu.cove" build/signed-entitlements.plist
-          cp "Cove/Cove.entitlements" build/Cove.entitlements
+          xcrun codesign -d --entitlements :- "$PAYLOAD_APP" | grep -q "group.tr.sapu.cove"
 
           (cd "$IPA_DIR" && zip -r -y "../Cove.ipa" Payload)
           ls -lh "$(pwd)/build/Cove.ipa"
-          echo "---- embedded entitlements ----"
-          cat build/signed-entitlements.plist
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Cove-adhoc
-          path: |
-            build/Cove.ipa
-            build/Cove.entitlements
-            build/signed-entitlements.plist
+          name: Cove
+          path: build/Cove.ipa
           if-no-files-found: error
 
       - name: Draft release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: Build ${{ github.run_number }} (ad-hoc IPA)
+          name: Build ${{ github.run_number }}
           draft: true
-          files: |
-            build/Cove.ipa
-            build/Cove.entitlements
+          files: build/Cove.ipa
           body: |
-            Ad-hoc signed IPA. `group.tr.sapu.cove` is already in the code signature (XML + DER).
-
-            Resign with your development certificate and do not strip entitlements. The provisioning profile must list that same group on App ID `tr.sapu.cove`. A 7-day SideStore profile cannot use this group when it is registered to another team.
-
-            Delete the old Cove install before installing this build.
+            Sign `Cove.ipa` with rustsign, same as HouseArrest. Nothing else to download.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

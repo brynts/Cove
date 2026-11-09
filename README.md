@@ -11,48 +11,19 @@ Ini bukan jailbreak. Akses container-nya lewat [worse_query](https://github.com/
 
 ## Syarat
 
-Bundle ID `tr.sapu.cove`. Entitlement App Group wajib ada di signature **dan** di provisioning profile:
+Bundle ID `tr.sapu.cove`. `worse_query` butuh App Group `group.tr.sapu.cove` di signature IPA. ID yang sama ada di `Cove/CoveConfig.h` dan `Cove/Cove.entitlements`. Itu file build, bukan file yang di-upload terpisah.
 
-```xml
-<key>com.apple.security.application-groups</key>
-<array>
-  <string>group.tr.sapu.cove</string>
-</array>
-```
-
-ID yang sama ada di `Cove/CoveConfig.h`. Kalau diganti, ganti keduanya. Tanpa App Group, `worse_query` tidak bisa minta sandbox extension.
-
-Profile lama tidak ikut berubah. Setelah App Group di-assign ke App ID `tr.sapu.cove`, buat ulang profile-nya. Apple ID 7 harian lewat SideStore tidak bisa memakai group ini kalau group-nya sudah terdaftar di team lain.
+HouseArrest tidak butuh ini karena dia pakai `bad_query`. `bad_query` sudah diganti `worse_query` di iOS 26/27, dan `worse_query` berhenti kalau container App Group-nya tidak ada.
 
 Di iOS 26, query App Group pakai flag alternatif. Container app pakai flag biasa. Di luar rentang iOS di atas, Cove menolak jalan.
 
 ## Build
 
-Buka `Cove.xcodeproj` di Xcode dengan iOS 26 SDK, lalu pasang ke perangkat. Di Signing & Capabilities, App Groups harus `group.tr.sapu.cove` di team yang sama dengan sertifikat.
+Actions → Build IPA. Hasilnya satu file: `Cove.ipa`. Sign dengan rustsign (p12), sama seperti HouseArrest. Jangan strip entitlement bawaan IPA.
 
-Actions → Build IPA menghasilkan IPA ad-hoc. Entitlement sudah ditanam di signature (XML + DER) supaya tool resign tidak membuangnya. Tetap resign dengan profile development yang berisi group yang sama, lalu hapus instalasi lama sebelum pasang.
+Buka `Cove.xcodeproj` di Xcode kalau mau pasang langsung dari Mac.
 
-```bash
-xcodebuild archive \
-  -project Cove.xcodeproj \
-  -scheme Cove \
-  -configuration Release \
-  -destination 'generic/platform=iOS' \
-  -archivePath build/Cove.xcarchive \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY=""
-
-APP="$(find build/Cove.xcarchive/Products/Applications -name '*.app' -maxdepth 1 | head -1)"
-xattr -cr "$APP"
-codesign --force --sign - \
-  --entitlements Cove/Cove.entitlements \
-  --generate-entitlement-der \
-  --timestamp=none \
-  "$APP"
-```
-
-Log on-device ada di sheet kaca pembesar di tab Apps. Kalau App Group tetap kosong, log itu menyebut isi `embedded.mobileprovision` yang benar-benar terpasang.
+Log on-device ada di sheet kaca pembesar di tab Apps.
 
 ## Lisensi
 
