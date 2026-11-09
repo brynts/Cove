@@ -10,7 +10,7 @@ enum AppDiscovery {
         CoveWriteLog("scan start \(os)")
         progress("Checking \(os)")
         guard CoveOSIsSupported() else {
-            let message = "\(os) is outside iOS 26.0–26.7.2 and 27.0–27.2."
+            let message = "\(os) is outside iOS 26.0\u201326.7.2 and 27.0\u201327.2."
             CoveWriteLog(message)
             return .failure(CoveFailure(message: message))
         }
@@ -18,6 +18,12 @@ enum AppDiscovery {
             CoveWriteLog("group \(group)")
         } else {
             CoveWriteLog("no app group. \(CoveProvisioningGroupsSummary())")
+        }
+
+        progress("Reading installed apps")
+        if let listed = appsFromCatalog() {
+            CoveWriteLog("scan done catalog \(listed.count)")
+            return .success(listed)
         }
 
         progress("Listing application containers")
@@ -66,15 +72,45 @@ enum AppDiscovery {
                 isSystem: isSystem(bundleID)
             )
         }
-        let apps = byID.values.sorted {
-            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-        }
+        let apps = sorted(byID)
         saveCache(apps)
         CoveWriteLog("scan done \(apps.count)")
         if apps.isEmpty {
             return .failure(CoveFailure(message: "Containers were listed, but none had a bundle identifier."))
         }
         return .success(apps)
+    }
+
+    private static func appsFromCatalog() -> [InstalledApp]? {
+        let catalog = CoveInstalledApplications()
+        CoveWriteLog("catalog \(catalog.count)")
+        guard catalog.count > 0 else { return nil }
+        var byID: [String: InstalledApp] = [:]
+        var withPath = 0
+        for entry in catalog {
+            guard let bundleID = entry["bundleID"], bundleID.contains(".") else { continue }
+            let rawName = entry["name"] ?? ""
+            let rawPath = entry["container"] ?? ""
+            let path = rawPath.isEmpty ? "" : PathGuard.normalize(rawPath)
+            if !path.isEmpty { withPath += 1 }
+            byID[bundleID] = InstalledApp(
+                bundleID: bundleID,
+                displayName: rawName.isEmpty ? pretty(bundleID) : rawName,
+                containerPath: path,
+                isSystem: isSystem(bundleID)
+            )
+        }
+        CoveWriteLog("catalog apps=\(byID.count) paths=\(withPath)")
+        let apps = sorted(byID).filter { !$0.containerPath.isEmpty }
+        guard !apps.isEmpty else { return nil }
+        saveCache(apps)
+        return apps
+    }
+
+    private static func sorted(_ byID: [String: InstalledApp]) -> [InstalledApp] {
+        byID.values.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
     }
 
     static func loadCachedApps() -> [InstalledApp] {
@@ -135,7 +171,8 @@ enum AppDiscovery {
         let baseline = CoveBaselineInode()
         CoveWriteLog("leak baseline \(baseline)")
         guard baseline > 1 else { return [] }
-        let cap = min(baseline, UInt64(8_000_000))
+        let window = min(baseline, UInt64(6_000_000))
+        let start = baseline > window ? baseline - window + 1 : 1
         var usable: String?
         for root in roots {
             if CoveLeakRange(root, 1, 1) != nil {
@@ -149,17 +186,19 @@ enum AppDiscovery {
         }
         var found: [String] = []
         let step: UInt64 = 500_000
-        var cursor: UInt64 = 1
-        while cursor <= cap {
-            let end = min(cap, cursor + step - 1)
+        var cursor = start
+        while cursor <= baseline {
+            let end = min(baseline, cursor + step - 1)
             if let batch = CoveLeakRange(root, cursor, end) {
                 found.append(contentsOf: batch)
             }
-            progress("Scanning inodes \(Int((end * 100) / max(cap, UInt64(1))))%")
-            if end == cap { break }
+            let done = end - start
+            let span = max(baseline - start, 1)
+            progress("Scanning inodes \(Int((done * 100) / span))%")
+            if end == baseline { break }
             cursor = end + 1
         }
-        CoveWriteLog("leak found \(found.count)")
+        CoveWriteLog("leak found \(found.count) range \(start)-\(baseline)")
         return found
     }
 }
