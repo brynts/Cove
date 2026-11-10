@@ -49,33 +49,28 @@ final class AppLibrary: ObservableObject {
         let targets = apps
         DispatchQueue.global(qos: .utility).async {
             var records = self.loadBundleCache()
-            let missing = targets.filter { records[$0.bundleID] == nil }
-            if !missing.isEmpty {
-                let found = self.scanBundleIndex()
-                for (id, path) in found where records[id] == nil {
-                    records[id] = BundleRecord(path: path, name: "")
+            if targets.contains(where: { records[$0.bundleID] == nil }) {
+                for (id, record) in self.scanBundleIndex() where records[id] == nil {
+                    records[id] = record
                 }
-                self.saveBundleCache(records)
             }
             var icons = 0
             for app in targets {
-                let cachedIcon = self.cachedIcon(app.bundleID)
-                var icon = cachedIcon
+                var icon = self.cachedIcon(app.bundleID)
                 var name = records[app.bundleID]?.name ?? ""
-                if icon == nil, let path = records[app.bundleID]?.path, let info = CoveInspectBundle(path) {
-                    if let data = info["icon"] as? Data, let image = UIImage(data: data), image.size.width >= 16 {
-                        icon = image
-                        self.storeIcon(image, bundleID: app.bundleID)
-                    }
-                    if let found = info["name"] as? String, !found.isEmpty {
-                        name = found
-                        records[app.bundleID]?.name = found
-                    }
+                if icon == nil, let path = records[app.bundleID]?.path {
+                    let loaded = self.loadBundle(path, bundleID: app.bundleID)
+                    if icon == nil { icon = loaded.icon }
+                    if !loaded.name.isEmpty { name = loaded.name }
                 }
                 if icon == nil, let data = CoveSystemIconPNG(app.bundleID),
                    let image = UIImage(data: data), image.size.width >= 16 {
                     icon = image
                     self.storeIcon(image, bundleID: app.bundleID)
+                }
+                if var record = records[app.bundleID] {
+                    record.name = name
+                    records[app.bundleID] = record
                 }
                 if let icon {
                     icons += 1
@@ -106,7 +101,18 @@ final class AppLibrary: ObservableObject {
         }
     }
 
-    private func scanBundleIndex() -> [String: String] {
+    private func loadBundle(_ path: String, bundleID: String) -> (icon: UIImage?, name: String) {
+        guard let info = CoveInspectBundle(path) else { return (nil, "") }
+        var icon: UIImage?
+        if let data = info["icon"] as? Data, let image = UIImage(data: data), image.size.width >= 16 {
+            icon = image
+            storeIcon(image, bundleID: bundleID)
+        }
+        let name = (info["name"] as? String) ?? ""
+        return (icon, name)
+    }
+
+    private func scanBundleIndex() -> [String: BundleRecord] {
         let roots = [
             "/var/containers/Bundle/Application",
             "/private/var/containers/Bundle/Application"
@@ -136,13 +142,17 @@ final class AppLibrary: ObservableObject {
             cursor = end + 1
         }
         CoveWriteLog("bundle plists \(infos.count)")
-        var map: [String: String] = [:]
+        var map: [String: BundleRecord] = [:]
         for plist in infos {
             let appPath = URL(fileURLWithPath: plist).deletingLastPathComponent().path
-            guard appPath.hasSuffix(".app") else { continue }
-            guard let info = CoveInspectBundle(appPath),
+            guard appPath.hasSuffix(".app"), let info = CoveInspectBundle(appPath),
                   let id = info["bundleID"] as? String, id.contains(".") else { continue }
-            map[id] = appPath
+            let name = (info["name"] as? String) ?? ""
+            map[id] = BundleRecord(path: appPath, name: name)
+            if let data = info["icon"] as? Data, let image = UIImage(data: data), image.size.width >= 16 {
+                storeIcon(image, bundleID: id)
+                AppIconStore.set(image, for: id)
+            }
         }
         return map
     }
