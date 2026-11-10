@@ -2,7 +2,7 @@
 
 Browser file untuk app yang terpasang, plus pembersih cache dan file sementara. Jalan di **iOS 26.0–26.7.2** dan **iOS 27.0–27.2**.
 
-Ini bukan jailbreak. Akses container-nya lewat [worse_query](https://github.com/forcequitOS/worse_query) kalau App Group tersedia, dan lewat [bad_query](https://github.com/forcequitOS/bad_query) kalau tidak. Source keduanya ikut di repo ini dan tetap di bawah GPL-3.0.
+Ini bukan jailbreak. Akses container-nya lewat [worse_query](https://github.com/forcequitOS/worse_query). Daftar folder di iOS 27 lewat `fsgetpath`, sama seperti [WQFiles](https://github.com/kolbicz/WQFiles), karena folder induk tidak dapat token.
 
 ## Tab
 
@@ -11,11 +11,9 @@ Ini bukan jailbreak. Akses container-nya lewat [worse_query](https://github.com/
 
 ## Sign
 
-Actions → Build IPA menghasilkan satu file unsigned: `Cove.ipa`. Sign dengan RustSign, sama seperti HouseArrest.
+Actions → Build IPA menghasilkan satu file unsigned: `Cove.ipa`. Sign dengan RustSign.
 
-Sertifikat RustSign biasanya tidak membawa App Group `group.tr.sapu.cove`. Tanpa container itu `worse_query` tidak bisa jalan, jadi Cove lanjut pakai `bad_query` seperti HouseArrest.
-
-Di iOS 26, query App Group pakai flag alternatif. Di luar rentang iOS di atas, Cove menolak jalan.
+Signer harus menyisakan sebuah App Group. Cove memakai group mana pun yang benar-benar masuk ke proses, bukan cuma `group.tr.sapu.cove`. Kalau signer membuang semua App Group, `worse_query` tidak bisa jalan. Log menulis group yang dipakai.
 
 ## Lisensi
 
