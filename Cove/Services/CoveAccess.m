@@ -10,6 +10,7 @@
 #import "worse_query.h"
 #import "bad_query.h"
 
+#include <dlfcn.h>
 #include <pthread.h>
 #include <string.h>
 #include <unistd.h>
@@ -62,13 +63,58 @@ NSString *CoveOSLabel(void) {
             (long)v.majorVersion, (long)v.minorVersion, (long)v.patchVersion];
 }
 
+typedef struct __SecTask *CoveSecTaskRef;
+typedef CoveSecTaskRef (*CoveSecTaskCreate)(CFAllocatorRef);
+typedef CFTypeRef (*CoveSecTaskCopy)(CoveSecTaskRef, CFStringRef, CFErrorRef *);
+
+static NSString *CoveResolvedGroup(void) {
+    static NSString *group;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void *sec = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
+        CoveSecTaskCreate create = (CoveSecTaskCreate)dlsym(sec ? sec : RTLD_DEFAULT, "SecTaskCreateFromSelf");
+        CoveSecTaskCopy copy = (CoveSecTaskCopy)dlsym(sec ? sec : RTLD_DEFAULT, "SecTaskCopyValueForEntitlement");
+        NSArray *groups = nil;
+        if (create && copy) {
+            CoveSecTaskRef task = create(kCFAllocatorDefault);
+            if (task) {
+                CFTypeRef raw = copy(task, CFSTR("com.apple.security.application-groups"), NULL);
+                if (raw) {
+                    id value = CFBridgingRelease(raw);
+                    if ([value isKindOfClass:[NSArray class]]) groups = value;
+                    else if ([value isKindOfClass:[NSString class]]) groups = @[value];
+                }
+                CFRelease(task);
+            }
+        }
+        NSMutableArray<NSString *> *entitled = [NSMutableArray array];
+        for (id candidate in groups) {
+            if (![candidate isKindOfClass:[NSString class]] || [candidate length] == 0) continue;
+            [entitled addObject:candidate];
+            if (group.length) continue;
+            NSURL *root = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:candidate];
+            if (root.path.length) group = [candidate copy];
+        }
+        if (!group.length) {
+            NSURL *root = [NSFileManager.defaultManager
+                containerURLForSecurityApplicationGroupIdentifier:@COVE_APP_GROUP];
+            if (root.path.length) group = @COVE_APP_GROUP;
+        }
+        CoveWriteLog([NSString stringWithFormat:@"app group %@ entitled [%@]",
+                      group ?: @"NONE",
+                      entitled.count ? [entitled componentsJoinedByString:@", "] : @"none"]);
+    });
+    return group;
+}
+
 NSString *CoveAppGroupID(void) {
-    return @COVE_APP_GROUP;
+    return CoveResolvedGroup() ?: @COVE_APP_GROUP;
 }
 
 NSString *CoveAppGroupContainer(void) {
-    NSURL *url = [NSFileManager.defaultManager
-        containerURLForSecurityApplicationGroupIdentifier:@COVE_APP_GROUP];
+    NSString *group = CoveResolvedGroup();
+    if (!group.length) return nil;
+    NSURL *url = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:group];
     return url.path;
 }
 
@@ -89,7 +135,7 @@ static NSArray<NSString *> *coveStringList(id raw) {
 NSString *CoveProvisioningGroupsSummary(void) {
     NSString *path = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"embedded.mobileprovision"];
     if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
-        return @"No provisioning profile in the app bundle. RustSign certificates do not include this App Group, so Cove uses the HouseArrest query.";
+        return @"No provisioning profile in the app bundle.";
     }
     NSData *data = [NSData dataWithContentsOfFile:path];
     if (data.length == 0) return @"embedded.mobileprovision is empty.";
@@ -114,7 +160,7 @@ NSString *CoveProvisioningGroupsSummary(void) {
         ? ents[@"com.apple.developer.team-identifier"] : @"?";
     NSArray<NSString *> *groups = coveStringList(ents[@"com.apple.security.application-groups"]);
     if (groups.count == 0) {
-        return [NSString stringWithFormat:@"Profile %@ (team %@) has no App Group. Using the HouseArrest query.", appID, team];
+        return [NSString stringWithFormat:@"Profile %@ (team %@) has no App Group.", appID, team];
     }
     return [NSString stringWithFormat:@"Profile %@ (team %@) groups: %@.", appID, team, [groups componentsJoinedByString:@", "]];
 }
@@ -122,7 +168,7 @@ NSString *CoveProvisioningGroupsSummary(void) {
 NSString *CoveDescribeGrant(int64_t code) {
     switch (code) {
         case -1:
-            return @"Container query could not start.";
+            return @"No usable App Group. The signer dropped it.";
         case -2:
             return @"Could not resolve container-manager symbols on this iOS version.";
         case -3:
@@ -192,11 +238,11 @@ int64_t CoveGrant(NSString *path) {
     }
 
     pthread_mutex_lock(&gLock);
-    NSString *groupPath = CoveAppGroupContainer();
+    NSString *group = CoveResolvedGroup();
     int64_t handle = -1;
-    if (groupPath.length > 0) {
-        CoveWriteLog([NSString stringWithFormat:@"grant worse alt=%d %@", alt, path]);
-        handle = worse_query(path, @COVE_APP_GROUP, alt, true);
+    if (group.length > 0) {
+        CoveWriteLog([NSString stringWithFormat:@"grant worse %@ alt=%d %@", group, alt, path]);
+        handle = worse_query(path, group, alt, true);
     } else {
         CoveWriteLog([NSString stringWithFormat:@"grant bad %@", path]);
         handle = bad_query((char *)path.fileSystemRepresentation, true, NULL, false);
