@@ -57,6 +57,7 @@ final class AppLibrary: ObservableObject {
                 guard let record = records[app.bundleID] else { return true }
                 return record.name.isEmpty
             }
+            CoveWriteLog("enrich start targets=\(targets.count) cached=\(records.count) needsScan=\(needsScan)")
             if needsScan {
                 for (id, record) in self.scanBundleIndex() {
                     if records[id] == nil || records[id]!.name.isEmpty {
@@ -132,7 +133,11 @@ final class AppLibrary: ObservableObject {
             "/private/var/containers/Bundle/Application"
         ]
         let baseline = CoveBaselineInode()
-        guard baseline > 1 else { return [:] }
+        CoveWriteLog("bundle baseline \(baseline)")
+        guard baseline > 1 else {
+            CoveWriteLog("bundle baseline too low, skipping")
+            return [:]
+        }
         var root: String?
         for candidate in roots where CoveLeakAppInfoPlists(candidate, 1, 1) != nil {
             root = candidate
@@ -142,9 +147,11 @@ final class AppLibrary: ObservableObject {
             CoveWriteLog("bundle statfs failed")
             return [:]
         }
+        CoveWriteLog("bundle root \(root)")
         var infos: [String] = []
         let step: UInt64 = 500_000
         var cursor: UInt64 = 1
+        var batchIndex = 0
         while cursor <= baseline {
             let end = min(baseline, cursor + step - 1)
             if let batch = CoveLeakAppInfoPlists(root, cursor, end) {
@@ -152,6 +159,10 @@ final class AppLibrary: ObservableObject {
             }
             let percent = Int((end * 100) / max(baseline, 1))
             DispatchQueue.main.async { self.status = "Reading app bundles \(percent)%" }
+            batchIndex += 1
+            if batchIndex == 1 || batchIndex % 20 == 0 || end == baseline {
+                CoveWriteLog("bundle scan batch \(batchIndex) range \(cursor)-\(end) found=\(infos.count)")
+            }
             if end == baseline { break }
             cursor = end + 1
         }
