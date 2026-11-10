@@ -10,8 +10,6 @@ final class AppLibrary: ObservableObject {
     @Published var iconRevision = 0
     @Published var osLabel = ""
 
-    private var lookedUp = Set<String>()
-
     init() {
         osLabel = CoveOSLabel()
         apps = AppDiscovery.loadCachedApps()
@@ -34,7 +32,7 @@ final class AppLibrary: ObservableObject {
                     self.apps = list
                     self.error = nil
                     self.status = "\(list.count) apps"
-                    self.enrichStore()
+                    self.enrichFromBundles()
                 case .failure(let failure):
                     self.status = ""
                     if self.apps.isEmpty {
@@ -47,86 +45,152 @@ final class AppLibrary: ObservableObject {
         }
     }
 
-    private func enrichStore() {
-        let targets = apps.filter { !$0.isSystem && !lookedUp.contains($0.bundleID) }
-        guard !targets.isEmpty else { return }
+    private func enrichFromBundles() {
+        let targets = apps
         DispatchQueue.global(qos: .utility).async {
+            var records = self.loadBundleCache()
+            let missing = targets.filter { records[$0.bundleID] == nil }
+            if !missing.isEmpty {
+                let found = self.scanBundleIndex()
+                for (id, path) in found where records[id] == nil {
+                    records[id] = BundleRecord(path: path, name: "")
+                }
+                self.saveBundleCache(records)
+            }
+            var icons = 0
             for app in targets {
-                DispatchQueue.main.async { self.lookedUp.insert(app.bundleID) }
-                guard let hit = Self.itunesLookup(bundleID: app.bundleID) else { continue }
-                if let icon = hit.icon { AppIconStore.set(icon, for: app.bundleID) }
+                let cachedIcon = self.cachedIcon(app.bundleID)
+                var icon = cachedIcon
+                var name = records[app.bundleID]?.name ?? ""
+                if icon == nil, let path = records[app.bundleID]?.path, let info = CoveInspectBundle(path) {
+                    if let data = info["icon"] as? Data, let image = UIImage(data: data), image.size.width >= 16 {
+                        icon = image
+                        self.storeIcon(image, bundleID: app.bundleID)
+                    }
+                    if let found = info["name"] as? String, !found.isEmpty {
+                        name = found
+                        records[app.bundleID]?.name = found
+                    }
+                }
+                if icon == nil, let data = CoveSystemIconPNG(app.bundleID),
+                   let image = UIImage(data: data), image.size.width >= 16 {
+                    icon = image
+                    self.storeIcon(image, bundleID: app.bundleID)
+                }
+                if let icon {
+                    icons += 1
+                    AppIconStore.set(icon, for: app.bundleID)
+                }
+                let display = name
                 DispatchQueue.main.async {
-                    if let index = self.apps.firstIndex(where: { $0.bundleID == app.bundleID }) {
+                    if !display.isEmpty, let index = self.apps.firstIndex(where: { $0.bundleID == app.bundleID }) {
                         var copy = self.apps[index]
-                        copy.displayName = hit.name
-                        self.apps[index] = copy
-                        self.apps.sort {
-                            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+                        let generated = AppDiscovery.pretty(copy.bundleID)
+                        if copy.displayName == generated || copy.displayName == copy.bundleID {
+                            copy.displayName = display
+                            self.apps[index] = copy
                         }
-                        AppDiscovery.remember(self.apps)
                     }
                     self.iconRevision += 1
                 }
             }
-        }
-    }
-
-    private static func itunesLookup(bundleID: String) -> (name: String, icon: UIImage?)? {
-        let nameKey = "cove.itunes.name.\(bundleID)"
-        let artKey = "cove.itunes.art.\(bundleID)"
-        if let stored = UserDefaults.standard.string(forKey: nameKey), !stored.isEmpty {
-            return (stored, icon(from: UserDefaults.standard.string(forKey: artKey)))
-        }
-        for country in ["id", "us"] {
-            var comps = URLComponents(string: "https://itunes.apple.com/lookup")
-            comps?.queryItems = [
-                URLQueryItem(name: "bundleId", value: bundleID),
-                URLQueryItem(name: "country", value: country)
-            ]
-            guard let url = comps?.url else { continue }
-            var request = URLRequest(url: url, timeoutInterval: 6)
-            request.cachePolicy = .returnCacheDataElseLoad
-            guard let data = try? URLSession.shared.syncData(request),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let results = json["results"] as? [[String: Any]],
-                  let first = results.first
-            else { continue }
-            let name = (first["trackName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let name, !name.isEmpty else { continue }
-            let art = (first["artworkUrl100"] as? String) ?? (first["artworkUrl60"] as? String)
-            UserDefaults.standard.set(name, forKey: nameKey)
-            if let art { UserDefaults.standard.set(art, forKey: artKey) }
-            return (name, icon(from: art))
-        }
-        return nil
-    }
-
-    private static func icon(from urlString: String?) -> UIImage? {
-        guard let urlString, let url = URL(string: urlString) else { return nil }
-        var request = URLRequest(url: url, timeoutInterval: 6)
-        request.cachePolicy = .returnCacheDataElseLoad
-        guard let data = try? URLSession.shared.syncData(request),
-              let image = UIImage(data: data),
-              image.size.width >= 16
-        else { return nil }
-        return image
-    }
-}
-
-private extension URLSession {
-    func syncData(_ request: URLRequest) throws -> Data {
-        var result: Result<Data, Error> = .failure(URLError(.badServerResponse))
-        let sem = DispatchSemaphore(value: 0)
-        let task = dataTask(with: request) { data, _, error in
-            if let data, error == nil {
-                result = .success(data)
-            } else {
-                result = .failure(error ?? URLError(.badServerResponse))
+            self.saveBundleCache(records)
+            CoveWriteLog("icons \(icons)/\(targets.count)")
+            DispatchQueue.main.async {
+                self.apps.sort {
+                    $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+                }
+                AppDiscovery.remember(self.apps)
+                if !self.scanning { self.status = "\(self.apps.count) apps" }
             }
-            sem.signal()
         }
-        task.resume()
-        _ = sem.wait(timeout: .now() + request.timeoutInterval + 1)
-        return try result.get()
+    }
+
+    private func scanBundleIndex() -> [String: String] {
+        let roots = [
+            "/var/containers/Bundle/Application",
+            "/private/var/containers/Bundle/Application"
+        ]
+        let baseline = CoveBaselineInode()
+        guard baseline > 1 else { return [:] }
+        var root: String?
+        for candidate in roots where CoveLeakAppInfoPlists(candidate, 1, 1) != nil {
+            root = candidate
+            break
+        }
+        guard let root else {
+            CoveWriteLog("bundle statfs failed")
+            return [:]
+        }
+        var infos: [String] = []
+        let step: UInt64 = 500_000
+        var cursor: UInt64 = 1
+        while cursor <= baseline {
+            let end = min(baseline, cursor + step - 1)
+            if let batch = CoveLeakAppInfoPlists(root, cursor, end) {
+                infos.append(contentsOf: batch)
+            }
+            let percent = Int((end * 100) / max(baseline, 1))
+            DispatchQueue.main.async { self.status = "Reading app bundles \(percent)%" }
+            if end == baseline { break }
+            cursor = end + 1
+        }
+        CoveWriteLog("bundle plists \(infos.count)")
+        var map: [String: String] = [:]
+        for plist in infos {
+            let appPath = URL(fileURLWithPath: plist).deletingLastPathComponent().path
+            guard appPath.hasSuffix(".app") else { continue }
+            guard let info = CoveInspectBundle(appPath),
+                  let id = info["bundleID"] as? String, id.contains(".") else { continue }
+            map[id] = appPath
+        }
+        return map
+    }
+
+    private struct BundleRecord {
+        var path: String
+        var name: String
+    }
+
+    private func cacheURL() -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("cove-bundles.tsv")
+    }
+
+    private func iconURL(_ bundleID: String) -> URL {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("icons", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let safe = bundleID.replacingOccurrences(of: "/", with: "_")
+        return dir.appendingPathComponent(safe + ".png")
+    }
+
+    private func cachedIcon(_ bundleID: String) -> UIImage? {
+        guard let data = try? Data(contentsOf: iconURL(bundleID)) else { return nil }
+        return UIImage(data: data)
+    }
+
+    private func storeIcon(_ image: UIImage, bundleID: String) {
+        guard let data = image.pngData() else { return }
+        try? data.write(to: iconURL(bundleID), options: .atomic)
+    }
+
+    private func loadBundleCache() -> [String: BundleRecord] {
+        guard let text = try? String(contentsOf: cacheURL(), encoding: .utf8) else { return [:] }
+        var map: [String: BundleRecord] = [:]
+        for line in text.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 2, parts[0].contains("."), parts[1].hasSuffix(".app") else { continue }
+            map[parts[0]] = BundleRecord(path: parts[1], name: parts.count >= 3 ? parts[2] : "")
+        }
+        return map
+    }
+
+    private func saveBundleCache(_ records: [String: BundleRecord]) {
+        let text = records
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)\t\($0.value.path)\t\($0.value.name)" }
+            .joined(separator: "\n")
+        try? text.write(to: cacheURL(), atomically: true, encoding: .utf8)
     }
 }
