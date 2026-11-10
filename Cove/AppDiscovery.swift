@@ -33,14 +33,19 @@ enum AppDiscovery {
         ]
         var containers: [String] = []
         var lastError = ""
-        for root in roots {
-            let listed = CoveListChildren(root)
-            CoveWriteLog("list \(root) code=\(listed.code) count=\(listed.paths.count) \(listed.errorText)")
-            if listed.code >= 0, !listed.paths.isEmpty {
-                containers = listed.paths
-                break
+        // iOS 27.0.1 does not issue a token for these parent folders.
+        if os.hasPrefix("iOS 27") {
+            CoveWriteLog("parent folder has no token on iOS 27, scanning inodes")
+        } else {
+            for root in roots {
+                let listed = CoveListChildren(root)
+                CoveWriteLog("list \(root) code=\(listed.code) count=\(listed.paths.count) \(listed.errorText)")
+                if listed.code >= 0, !listed.paths.isEmpty {
+                    containers = listed.paths
+                    break
+                }
+                if !listed.errorText.isEmpty { lastError = listed.errorText }
             }
-            if !listed.errorText.isEmpty { lastError = listed.errorText }
         }
         if containers.isEmpty {
             containers = leakContainers(roots: roots, progress: progress)
@@ -168,7 +173,7 @@ enum AppDiscovery {
     }
 
     private static func leakContainers(roots: [String], progress: (String) -> Void) -> [String] {
-        progress("Parent list failed. Scanning inodes")
+        progress("Scanning inodes")
         let baseline = CoveBaselineInode()
         CoveWriteLog("leak baseline \(baseline)")
         guard baseline > 1 else { return [] }
