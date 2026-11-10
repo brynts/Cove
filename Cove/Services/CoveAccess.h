@@ -23,7 +23,14 @@ void CoveRelease(int64_t handle);
 CoveListResult *CoveListChildren(NSString *path);
 uint64_t CoveBaselineInode(void);
 NSArray<NSString *> * _Nullable CoveLeakRange(NSString *directory, uint64_t startInode, uint64_t endInode);
+/// Info.plist paths directly inside Name.app under a bundle-container parent.
+NSArray<NSString *> * _Nullable CoveLeakAppInfoPlists(NSString *directory, uint64_t startInode, uint64_t endInode);
 NSString * _Nullable CoveContainerIdentifier(NSString *containerPath);
+
+/// bundleID, name, and icon (PNG data) from a .app directory. Grants the bundle.
+NSDictionary<NSString *, id> * _Nullable CoveInspectBundle(NSString *appPath);
+/// SpringBoard's cached icon, when iOS will hand it out. Nil otherwise.
+NSData * _Nullable CoveSystemIconPNG(NSString *bundleID);
 
 void CoveWriteLog(NSString *message);
 NSString *CoveReadLog(void);
