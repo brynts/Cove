@@ -31,7 +31,12 @@ static void coveAddProxy(NSMutableArray *result, NSMutableSet<NSString *> *seen,
     if (bundleID.length == 0 || ![bundleID containsString:@"."]) return;
     if ([seen containsObject:bundleID]) return;
 
-    NSString *name = bundleID;
+    // Leave name unset when localizedName is unavailable. Falling back to the
+    // raw bundleID here used to make it into the UI as the app's "name" --
+    // AppDiscovery.pretty(bundleID) is a nicer placeholder, and the real
+    // CFBundleDisplayName/CFBundleName read from the .app bundle should win
+    // over this once AppLibrary.enrichFromBundles() runs.
+    NSString *name = nil;
     SEL nameSel = NSSelectorFromString(@"localizedName");
     if ([app respondsToSelector:nameSel]) {
         NSString *localized = coveString(((id (*)(id, SEL))objc_msgSend)(app, nameSel));
@@ -48,7 +53,7 @@ static void coveAddProxy(NSMutableArray *result, NSMutableSet<NSString *> *seen,
 
     NSMutableDictionary<NSString *, NSString *> *entry = [NSMutableDictionary dictionary];
     entry[@"bundleID"] = bundleID;
-    entry[@"name"] = name;
+    if (name.length) entry[@"name"] = name;
     if (container.length) entry[@"container"] = container;
     [seen addObject:bundleID];
     [result addObject:entry];

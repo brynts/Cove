@@ -49,16 +49,26 @@ final class AppLibrary: ObservableObject {
         let targets = apps
         DispatchQueue.global(qos: .utility).async {
             var records = self.loadBundleCache()
-            if targets.contains(where: { records[$0.bundleID] == nil }) {
-                for (id, record) in self.scanBundleIndex() where records[id] == nil {
-                    records[id] = record
+            // Rescan the bundle index whenever a target has no record yet, or
+            // has a record that never resolved a name (a past failed read
+            // used to get cached as "done" forever, freezing the fallback
+            // name/icon in place even on later successful launches).
+            let needsScan = targets.contains { app in
+                guard let record = records[app.bundleID] else { return true }
+                return record.name.isEmpty
+            }
+            if needsScan {
+                for (id, record) in self.scanBundleIndex() {
+                    if records[id] == nil || records[id]!.name.isEmpty {
+                        records[id] = record
+                    }
                 }
             }
             var icons = 0
             for app in targets {
                 var icon = self.cachedIcon(app.bundleID)
                 var name = records[app.bundleID]?.name ?? ""
-                if icon == nil, let path = records[app.bundleID]?.path {
+                if icon == nil || name.isEmpty, let path = records[app.bundleID]?.path {
                     let loaded = self.loadBundle(path, bundleID: app.bundleID)
                     if icon == nil { icon = loaded.icon }
                     if !loaded.name.isEmpty { name = loaded.name }
@@ -68,7 +78,7 @@ final class AppLibrary: ObservableObject {
                     icon = image
                     self.storeIcon(image, bundleID: app.bundleID)
                 }
-                if var record = records[app.bundleID] {
+                if var record = records[app.bundleID], !name.isEmpty {
                     record.name = name
                     records[app.bundleID] = record
                 }
@@ -76,12 +86,16 @@ final class AppLibrary: ObservableObject {
                     icons += 1
                     AppIconStore.set(icon, for: app.bundleID)
                 }
+                // The name read from the .app bundle's Info.plist
+                // (CFBundleDisplayName/CFBundleName) is authoritative --
+                // always prefer it over whatever placeholder is currently
+                // shown, instead of only swapping it in when the current
+                // name happens to look like a generated placeholder.
                 let display = name
                 DispatchQueue.main.async {
                     if !display.isEmpty, let index = self.apps.firstIndex(where: { $0.bundleID == app.bundleID }) {
                         var copy = self.apps[index]
-                        let generated = AppDiscovery.pretty(copy.bundleID)
-                        if copy.displayName == generated || copy.displayName == copy.bundleID {
+                        if copy.displayName != display {
                             copy.displayName = display
                             self.apps[index] = copy
                         }
